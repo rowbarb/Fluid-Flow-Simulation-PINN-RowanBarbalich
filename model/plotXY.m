@@ -1,16 +1,16 @@
-function plotXY(X,Y,s,Nx,Ny)
+function plotXY(X,Y,Nx,Ny,text)
 %% plots DeepCFD data
     % extract data
-    objSDF = squeeze(X(s,1,:,:));
-    masks = squeeze(X(s,2,:,:));
-    wallSDF = squeeze(X(s,3,:,:));
-    ux = squeeze(Y(s,1,:,:));
-    uy = squeeze(Y(s,2,:,:));
+    objSDF = squeeze(X(:,:,1));
+    masks = squeeze(X(:,:,2));
+    wallSDF = squeeze(X(:,:,3));
+    ux = squeeze(Y(:,:,1));
+    uy = squeeze(Y(:,:,2));
     u = sqrt(ux.^2 + uy.^2); % compute resultant velocity
-    P = squeeze(Y(s,3,:,:));
+    P = squeeze(Y(:,:,3));
     object = masks==0; % store obstacle shape from masks
     objectRGB = ones(Ny,Nx,3); % draw obstacle in white
-    numLines = ceil(Ny/2); % number of streamlines
+    numLines = floor(Ny/2); % number of streamlines
 
     % create mesh grid for streamlines
     x = 1:1:Nx;
@@ -18,9 +18,9 @@ function plotXY(X,Y,s,Nx,Ny)
     [xm,ym] = meshgrid(x,y);
 
     % create plots
-    figure(1)
+    figure()
     plot = tiledlayout(2,3,'TileSpacing','tight');
-    title(plot,['Sample #' num2str(s)])
+    title(plot,text)
     subtitle(plot,' ') % for extra spacing
     
         % object SDF
