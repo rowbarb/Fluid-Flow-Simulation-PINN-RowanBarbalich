@@ -8,14 +8,14 @@
     D = 0.120; % [m]
     rho = 1000; % [kg/m^3]
     nu = 1e-4; % [m^2/s]
+    Uin = 0.1; % [m/s]
 
     % check if data is already loaded
-    if ~exist('dlX','var') && ~exist('dlY','var')
-
+    % if ~exist('dataX','var') && ~exist('dataY','var')
         % check if training data is already in .mat format
-        if isfile('../data/dlX.mat') && isfile('../data/dlY.mat')
-            dlX = load('../data/dlX.mat');
-            dlY = load('../data/dlY.mat');
+        if isfile('../data/dataX.mat') && isfile('../data/dataY.mat')
+            dataX = load('../data/dataX.mat'); dataX = dataX.dataX;
+            dataY = load('../data/dataY.mat'); dataY = dataY.dataY;
         else % otherwise read .pkl files (from https://zenodo.org/record/3666056/files/DeepCFD.zip?download=1)
             pickle = py.importlib.import_module('pickle'); % import pickle module (from python)
             X = py.open('../data/dataX.pkl','rb'); % open data
@@ -26,14 +26,37 @@
             Y.close();
             dataX = numpy2mat(X_py,Nx,Ny,Nc,Ns); % convert data to MATLAB array
             dataY = numpy2mat(Y_py,Nx,Ny,Nc,Ns); 
-            dlX = dlarray(gpuArray(dataX),'SSCB'); % store in dl arrays for automatic differentiation
-            dlY = dlarray(gpuArray(dataY),'SSCB'); % gpu arrays for faster training
+            save('../data/dataX.mat','dataX'); % save for future
+            save('../data/dataY.mat','dataY');
         end
+    % end
+
+    % nondimensionalize data
+    % Umax = max(dataY(:,:,1,:),[],'all');
+    % Vmax = max(dataY(:,:,2,:),[],'all');
+    P_dyn = rho * Uin^2;
+    dataY(:,:,1,:) = dataY(:,:,1,:)/Uin;
+    dataY(:,:,2,:) = dataY(:,:,2,:)/Uin;
+    dataY(:,:,3,:) = dataY(:,:,3,:)/P_dyn;
+
+    % setup training on GPU if available
+    if canUseGPU % store data in gpuArray
+        dlX = dlarray(gpuArray(dataX),'SSCB'); % dlarrays for automatic differentiation
+        dlY = dlarray(gpuArray(dataY),'SSCB');
+    else % otherwise normal dlarray
+        dlX = dlarray(dataX,'SSCB');
+        dlY = dlarray(dataY,'SSCB');
     end
 
     % visualize random sample from dataset
-    random = ceil(Ns*rand)
+    random = ceil(Ns*rand);
     plotXY(dataX(:,:,:,random),dataY(:,:,:,random),Nx,Ny,['Sample #' num2str(random)]);
+
+    % % compare output to sample
+    % 
+    % Y_out = forward(JRNY,dlX(:,:,:,random));
+    % Y_out = extractdata(Y_out);
+    % plotXY(dataX(:,:,:,random),squeeze(Y_out),Nx,Ny,'Output');
 
 % create neural network architecture
 
@@ -41,64 +64,78 @@
     szIn = [Nx Ny Nc]; % object SDF, masks, wall SDF fields
     szOut = [Nx Ny Nc]; % u, v, P fields
 
-    % number of hidden units
-    numHidden = 128;
-
     % architecture
     layers = [
-        imageInputLayer(szIn, Normalization="none", Name="input")
-
-        % ---- Block 1 ----
-        convolution2dLayer(3,32,Padding="same",Name="conv1")
-        reluLayer(Name="relu1")
-
-        % ---- Block 2 ----
-        convolution2dLayer(3,64,Padding="same",Name="conv2")
-        reluLayer(Name="relu2")
-
-        % ---- Bottleneck ----
-        convolution2dLayer(3,64,Padding="same",Name="conv3")
-        reluLayer(Name="relu3")
-
-        % ---- Block 3 ----
-        convolution2dLayer(3,32,Padding="same",Name="conv4")
-        reluLayer(Name="relu4")
-
-        % ---- Output ----
-        convolution2dLayer(1,3,Padding="same",Name="output")  % (u, v, p)
+        imageInputLayer([Nx Ny Nc],Normalization="none")
+        convolution2dLayer(3,64,"Padding","same")
+        tanhLayer
+        convolution2dLayer(3,128,"Padding","same")
+        tanhLayer
+        convolution2dLayer(3,512,"Padding","same")
+        tanhLayer
+        convolution2dLayer(3,128,"Padding","same")
+        tanhLayer
+        convolution2dLayer(3,64,"Padding","same")
+        tanhLayer
+        convolution2dLayer(1,3,"Padding","same")
     ];
-
-    JRNY = dlnetwork(layers);
-    JRNY = dlupdate(@gpuArray,JRNY); % train on GPU
+    JRNY = dlnetwork(layers); % create network 
+    if canUseGPU, JRNY = dlupdate(@gpuArray,JRNY); end % train on GPU
  
 % train neural network
 
     % define hyperparameters
-    szBatch = 8; % number of samples per batch;
-    numEpochs = 500; % number of epochs
-    numBatches = floor(Ns / szBatch);
+    szBatch = 8; % number of samples per batch (iteration)
+    numEpochs = 300; % number of epochs
+    numBatches = floor(Ns / szBatch); % batches to cover all training data
 
-    % ADAM optimizer parameters (stochastic gradient descent with momentum)
-    initialLR = 0.001; % initial learning rate
-    mp = []; % mean
-    vp = []; % variance
+    % adam optimizer parameters (adaptive moment estimation)
+    learnRate = 1e-4;
+    averageGrad = [];
+    averageSqGrad = [];
+
+    % initialize training monitor
+    monitor = trainingProgressMonitor(Metrics="Loss",Info="Epoch",XLabel="Epoch");
     
     % train neural network
     for epoch = 1:numEpochs
-        for b = 1:numBatches
-    
-            batch = (b-1)*szBatch + (1:szBatch);
-            
-            Xbatch = dlX(:,:,:,batch);
-            Ybatch = dlY(:,:,:,batch);
-    
-            [loss,grad] = dlfeval(@lossFcn,JRNY,Xbatch,Ybatch,L,D,rho,nu,Nx,Ny); % compute loss and gradients
-            [JRNY,mp,vp] = adamupdate(JRNY,grad,mp,vp,epoch,initialLR); % update neural network
+        if epoch <= 20 % adjust weights as training progresses
+            w_UV = 1e6;  w_P = 1e5;  w_bc = 1e4;   w_phys = 1e-8;
+        elseif epoch <= 50
+            w_UV = 1e5;  w_P = 1e4;  w_bc = 5e4;   w_phys = 1e-6;
+        elseif epoch <= 100
+            w_UV = 1e4;  w_P = 1e3;  w_bc = 1e5;   w_phys = 1e-4;
+        elseif epoch <= 200
+            w_UV = 5e3;  w_P = 5e2;  w_bc = 1e5;   w_phys = 1e-3;
+        else
+            w_UV = 1e3;  w_P = 1e2;  w_bc = 1e5;   w_phys = 1e-2; 
         end
+        % learnRate = 1e-4 + 9e-4 * (epoch > 50);  % change to 1e-3 later
+        for b = 1:numBatches
+            batch = (b-1)*szBatch + (1:szBatch); % current batch indices
+            for i = 1:length(batch)
+                Xbatch = dlX(:,:,:,batch(i)); % get X and Y data
+                Ybatch = dlY(:,:,:,batch(i)); 
+                [loss,grad,lossDisp] = dlfeval(@lossFcn,JRNY,Xbatch,Ybatch,Nx,Ny,L,D,rho,nu,Uin,w_phys,w_bc,w_UV,w_P); % compute loss and gradients
+                [JRNY,mp,vp] = adamupdate(JRNY,grad,averageGrad,averageSqGrad,epoch,learnRate); % update neural network
+            end
+        end
+        disp(['Epoch ' num2str(epoch)]);
+        disp(['     Physics loss: ' num2str(lossDisp(1))])
+        disp(['     BC loss: ' num2str(lossDisp(2))])
+        disp(['     Velocity loss: ' num2str(lossDisp(3))])
+        disp(['     Pressure loss: ' num2str(lossDisp(4))])
+        disp(['     Max velocity: ' num2str(lossDisp(5))])
+        disp(['     Max divergence: ' num2str(lossDisp(6))])
+
+        recordMetrics(monitor,epoch,Loss=loss);
+        updateInfo(monitor,'Epoch',[num2str(epoch) ' of ' num2str(numEpochs)]);
+        monitor.Progress = 100 * epoch/numEpochs;
         
-        disp(['Epoch ' num2str(epoch) ': loss = ' num2str(extractdata(loss))]);
     end
+
+% compare output to sample
 
     Y_out = forward(JRNY,dlX(:,:,:,random));
     Y_out = extractdata(Y_out);
-    plotXY(dataX(:,:,:,random),Y_out(:,:,:,1),Nx,Ny,'Output');
+    plotXY(dataX(:,:,:,random),squeeze(Y_out),Nx,Ny,'Output');
