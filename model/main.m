@@ -64,35 +64,44 @@
 %% initialize PINN
 
     PINN = initializePINN(Nx,Ny,Nc);
- 
+
 %% train neural network
 
-    numEpochs = 250;
+    numEpochs = 250; % number of passes o
     szBatch = 32; % samples per batch
     [PINN,cvg] = trainPINN(PINN,Nx,Ny,Ns,dlX,dlY,numEpochs,szBatch,@lossFcn,L,D,nu,Uin);
 
 %% validation
     
-    % plot
-    trainingDiv = avgDiv(dlX,dlY,Nx,Ny,Ns,L,D); % compute average divergence of training velocity fields
+    % use model on test data and plot 10 comparisons
     testDataOut = zeros(Nx,Ny,Nc,nTest);
     testDataX = gather(extractdata(testDataX)); % convert from GPUarray for plotting
     testDataY = gather(extractdata(testDataY));
-    for i = 1:5 % compare 10 outputs to ground truth data
+    for i = 1:nTest % compare 10 outputs to ground truth data
         testDataOut(:,:,:,i) = forward(PINN,testDataX(:,:,:,i)); % run model for each test sample
-        plotXY(testDataX(:,:,:,i),testDataY(:,:,:,i),Nx,Ny, ...
-            ['Test Sample ' num2str(i) ' (' num2str(testIdx(i)) '): Ground Truth Data'])
-        plotXY(testDataX(:,:,:,i),testDataOut(:,:,:,i),Nx,Ny, ...
-            ['Test Sample ' num2str(i) ' (' num2str(testIdx(i)) '): Model Output'])
+        if i <= 10
+            plotXY(testDataX(:,:,:,i),testDataY(:,:,:,i),Nx,Ny, ...
+                ['Test Sample ' num2str(i) ' (' num2str(testIdx(i)) '): Ground Truth Data'])
+            plotXY(testDataX(:,:,:,i),testDataOut(:,:,:,i),Nx,Ny, ...
+                ['Test Sample ' num2str(i) ' (' num2str(testIdx(i)) '): Model Output'])
+        end
     end
 
-    % plot error heatmap for sample 5
-    uTest = sqrt(testDataY(:,:,1,5).^2 + testDataY(:,:,2,5).^2);
-    uOut = sqrt(testDataOut(:,:,1,5).^2 + testDataOut(:,:,2,5).^2);
+    % compute average divergence of training and predicted velocity fields
+    trainingDiv = avgDiv(dlX,dlY,Nx,Ny,Ns,L,D)
+    testDiv = avgDiv(testDataX,testDataOut,Nx,Ny,nTest,L,D)
+
+    % plot error heatmap for sample 5 and average across all samples
+    uTest = sqrt(testDataY(:,:,1,:).^2 + testDataY(:,:,2,:).^2);
+    uOut = sqrt(testDataOut(:,:,1,:).^2 + testDataOut(:,:,2,:).^2);
     uError = abs(uTest - uOut); % = abs res. velocity error / Uin
+    uErrorAvg = mean(uError,4); % average error at each cell across test set
+    uError5 = uError(:,:,5); % cell-wise error for sample 5
+
+    % average error plot
     figure()
-    imagesc(uError')
-    title('Error Heatmap')
+    imagesc(uErrorAvg')
+    title('Average Error Heatmap')
     xlabel('Nx')
     ylabel('Ny')
     axis equal
@@ -102,7 +111,20 @@
     cb = colorbar;
     cb.Label.String = '\deltav / U_{in}';
 
-    % plot convergence
+    % sample 5 error plot
+    figure()
+    imagesc(uError5')
+    title('Sample 5 Error Heatmap')
+    xlabel('Nx')
+    ylabel('Ny')
+    axis equal
+    xlim([0 Nx])
+    ylim([0 Ny])
+    clim([0 0.15])
+    cb = colorbar;
+    cb.Label.String = '\deltav / U_{in}';
+
+    % convergence plot
     figure()
     title('Error vs. Training Epoch')
     xlabel('Epoch')

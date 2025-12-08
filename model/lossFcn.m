@@ -31,8 +31,8 @@ function [loss,grad,cvg,lossDisp] = lossFcn(neuralNet,dlX,dlY,Nx,Ny,L,D,nu,Uin,w
     ymomentum = (V .* dVdy + U .* dVdx + dPdy - (1/Re)*(dVdxx + dVdyy)).*fluid;
 
     % gov eq. loss (MSE) and residuals
-    % physicsLoss = mean(continuity.^2,'all') ...
-    %             + mean(xmomentum.^2,'all') ...
+    % physicsLoss = mean(continuity.^2,'all') ... removed momentum for model convergence,
+    %             + mean(xmomentum.^2,'all') ... see 'Issues Encountered' report section
     %             + mean(ymomentum.^2,'all');
     physicsLoss =  mean(continuity.^2,'all');
     div_mean = mean(abs(continuity),'all');
@@ -45,7 +45,7 @@ function [loss,grad,cvg,lossDisp] = lossFcn(neuralNet,dlX,dlY,Nx,Ny,L,D,nu,Uin,w
     wallLoss = mean(u_res(wall).^2,'all'); % no slip
     outletLoss = mean(dUdx(outlet).^2,'all'); % zero gradient
     objectLoss = mean(u_res(object).^2,'all');
-    bcLoss = inletLoss + wallLoss + outletLoss + objectLoss; % prioritize no slip
+    bcLoss = inletLoss + wallLoss + outletLoss + objectLoss;
     
     % data loss (MSE) and residuals
     dataLossUV = mean((Y(:,:,1:2) - dlY(:,:,1:2)).^2, 'all');
@@ -57,6 +57,6 @@ function [loss,grad,cvg,lossDisp] = lossFcn(neuralNet,dlX,dlY,Nx,Ny,L,D,nu,Uin,w
     % total loss and gradient
     loss = w_UV*dataLossUV + w_P*dataLossP + w_bc*bcLoss + w_phys*physicsLoss;
     grad = dlgradient(loss,neuralNet.Learnables);
-    cvg = [div_mean div_max mom_mean U_L2 P_L2];
-    lossDisp = [physicsLoss bcLoss dataLossUV dataLossP max(u_res,[],'all')];
+    cvg = [div_mean div_max mom_mean U_L2 P_L2]; % for model convergence tracking
+    lossDisp = [physicsLoss bcLoss dataLossUV dataLossP max(u_res,[],'all')]; % for output monitor
 end

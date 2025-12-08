@@ -1,8 +1,10 @@
-function avgDiv = avgDiv(dlX,dlY,Nx,Ny,Ns,L,D)
+function avgDiv = avgDiv(X,Y,Nx,Ny,Ns,L,D)
 %% compute the average divergence of velocity (absolute value) fields across all training samples
+    if isa(X,'dlarray') == 1 && isa(Y,'dlarray') == 1 % convert to double if necessary
+        X = gather(extractdata(X));
+        Y = gather(extractdata(Y));
+    end
     
-    X = gather(extractdata(dlX));
-    Y = gather(extractdata(dlY));
     U = Y(:,:,1,:); U = squeeze(U);
     V = Y(:,:,2,:); V = squeeze(V);
     P = Y(:,:,3,:); P = squeeze(P);
