@@ -1,7 +1,16 @@
-% load training/test data (from DeepCFD https://github.com/mdribeiro/DeepCFD) 
+% R. Barbalich, Y. Huang, N. Lao, and J. Porco
+% ME635 Modeling and Simulation
+% Stevens Institute of Technology
+% 2D Steady Incompressible Flow PINN
+% December 9, 2025
+
+%% load training/test data (from DeepCFD https://github.com/mdribeiro/DeepCFD) 
     
-    % dataset dimensions
+    % dataset dimensions and test samples
     Nx = 172; Ny = 79; Nc = 3; Ns = 981;
+
+    % reserve ~25% of training set for validation
+    nTest = floor(Ns*0.25);
 
     % physical constants
     L = 0.260; % [m]
@@ -11,33 +20,28 @@
     Uin = 0.1; % [m/s]
 
     % check if data is already loaded
-    % if ~exist('dataX','var') && ~exist('dataY','var')
-        % check if training data is already in .mat format
-        if isfile('../data/dataX.mat') && isfile('../data/dataY.mat')
-            dataX = load('../data/dataX.mat'); dataX = dataX.dataX;
-            dataY = load('../data/dataY.mat'); dataY = dataY.dataY;
-        else % otherwise read .pkl files (from https://zenodo.org/record/3666056/files/DeepCFD.zip?download=1)
-            pickle = py.importlib.import_module('pickle'); % import pickle module (from python)
-            X = py.open('../data/dataX.pkl','rb'); % open data
-            Y = py.open('../data/dataY.pkl','rb');
-            X_py = pickle.load(X); % returns numpy nd array
-            Y_py = pickle.load(Y);
-            X.close();
-            Y.close();
-            dataX = numpy2mat(X_py,Nx,Ny,Nc,Ns); % convert data to MATLAB array
-            dataY = numpy2mat(Y_py,Nx,Ny,Nc,Ns); 
-            save('../data/dataX.mat','dataX'); % save for future
-            save('../data/dataY.mat','dataY');
-        end
-    % end
+    if isfile('../data/dataX.mat') && isfile('../data/dataY.mat')
+        dataX = load('../data/dataX.mat'); dataX = dataX.dataX;
+        dataY = load('../data/dataY.mat'); dataY = dataY.dataY;
+    else % otherwise read .pkl files (from https://zenodo.org/record/3666056/files/DeepCFD.zip?download=1)
+        pickle = py.importlib.import_module('pickle'); % import pickle module (from python)
+        X = py.open('../data/dataX.pkl','rb'); % open data
+        Y = py.open('../data/dataY.pkl','rb');
+        X_py = pickle.load(X); % returns numpy nd array
+        Y_py = pickle.load(Y);
+        X.close();
+        Y.close();
+        dataX = numpy2mat(X_py,Nx,Ny,Nc,Ns); % convert data to MATLAB array
+        dataY = numpy2mat(Y_py,Nx,Ny,Nc,Ns); 
+        save('../data/dataX.mat','dataX'); % save for future
+        save('../data/dataY.mat','dataY');
+    end
 
     % nondimensionalize data
-    % Umax = max(dataY(:,:,1,:),[],'all');
-    % Vmax = max(dataY(:,:,2,:),[],'all');
-    P_dyn = rho * Uin^2;
-    dataY(:,:,1,:) = dataY(:,:,1,:)/Uin;
+    P_dynamic = rho * Uin^2;
+    dataY(:,:,1,:) = dataY(:,:,1,:)/Uin; % normalize to inlet velocity
     dataY(:,:,2,:) = dataY(:,:,2,:)/Uin;
-    dataY(:,:,3,:) = dataY(:,:,3,:)/P_dyn;
+    dataY(:,:,3,:) = dataY(:,:,3,:)/P_dynamic; % normalize to dynamic pressure
 
     % setup training on GPU if available
     if canUseGPU % store data in gpuArray
@@ -48,94 +52,65 @@
         dlY = dlarray(dataY,'SSCB');
     end
 
-    % visualize random sample from dataset
-    random = ceil(Ns*rand);
-    plotXY(dataX(:,:,:,random),dataY(:,:,:,random),Nx,Ny,['Sample #' num2str(random)]);
+    % remove nTest samples from dataset for validation
+    testIdx = randperm(Ns); testIdx = testIdx(1:nTest); % take first nTest samples
+    trainIdx = true(1,Ns); trainIdx(testIdx) = false; % training indices
+    testDataX = dlX(:,:,:,testIdx); % take samples from training data
+    testDataY = dlY(:,:,:,testIdx); % take outputs for comparison
+    dlX = dlX(:,:,:,trainIdx); % remove samples from training data
+    dlY = dlY(:,:,:,trainIdx);
+    Ns = Ns - nTest;
 
-    % % compare output to sample
-    % 
-    % Y_out = forward(JRNY,dlX(:,:,:,random));
-    % Y_out = extractdata(Y_out);
-    % plotXY(dataX(:,:,:,random),squeeze(Y_out),Nx,Ny,'Output');
+%% initialize PINN
 
-% create neural network architecture
-
-    % input and output size
-    szIn = [Nx Ny Nc]; % object SDF, masks, wall SDF fields
-    szOut = [Nx Ny Nc]; % u, v, P fields
-
-    % architecture
-    layers = [
-        imageInputLayer([Nx Ny Nc],Normalization="none")
-        convolution2dLayer(3,64,"Padding","same")
-        tanhLayer
-        convolution2dLayer(3,128,"Padding","same")
-        tanhLayer
-        convolution2dLayer(3,512,"Padding","same")
-        tanhLayer
-        convolution2dLayer(3,128,"Padding","same")
-        tanhLayer
-        convolution2dLayer(3,64,"Padding","same")
-        tanhLayer
-        convolution2dLayer(1,3,"Padding","same")
-    ];
-    JRNY = dlnetwork(layers); % create network 
-    if canUseGPU, JRNY = dlupdate(@gpuArray,JRNY); end % train on GPU
+    PINN = initializePINN(Nx,Ny,Nc);
  
-% train neural network
+%% train neural network
 
-    % define hyperparameters
-    szBatch = 8; % number of samples per batch (iteration)
-    numEpochs = 300; % number of epochs
-    numBatches = floor(Ns / szBatch); % batches to cover all training data
+    numEpochs = 250;
+    szBatch = 32; % samples per batch
+    [PINN,cvg] = trainPINN(PINN,Nx,Ny,Ns,dlX,dlY,numEpochs,szBatch,@lossFcn,L,D,nu,Uin);
 
-    % adam optimizer parameters (adaptive moment estimation)
-    learnRate = 1e-4;
-    averageGrad = [];
-    averageSqGrad = [];
-
-    % initialize training monitor
-    monitor = trainingProgressMonitor(Metrics="Loss",Info="Epoch",XLabel="Epoch");
+%% validation
     
-    % train neural network
-    for epoch = 1:numEpochs
-        if epoch <= 20 % adjust weights as training progresses
-            w_UV = 1e6;  w_P = 1e5;  w_bc = 1e4;   w_phys = 1e-8;
-        elseif epoch <= 50
-            w_UV = 1e5;  w_P = 1e4;  w_bc = 5e4;   w_phys = 1e-6;
-        elseif epoch <= 100
-            w_UV = 1e4;  w_P = 1e3;  w_bc = 1e5;   w_phys = 1e-4;
-        elseif epoch <= 200
-            w_UV = 5e3;  w_P = 5e2;  w_bc = 1e5;   w_phys = 1e-3;
-        else
-            w_UV = 1e3;  w_P = 1e2;  w_bc = 1e5;   w_phys = 1e-2; 
-        end
-        % learnRate = 1e-4 + 9e-4 * (epoch > 50);  % change to 1e-3 later
-        for b = 1:numBatches
-            batch = (b-1)*szBatch + (1:szBatch); % current batch indices
-            for i = 1:length(batch)
-                Xbatch = dlX(:,:,:,batch(i)); % get X and Y data
-                Ybatch = dlY(:,:,:,batch(i)); 
-                [loss,grad,lossDisp] = dlfeval(@lossFcn,JRNY,Xbatch,Ybatch,Nx,Ny,L,D,rho,nu,Uin,w_phys,w_bc,w_UV,w_P); % compute loss and gradients
-                [JRNY,mp,vp] = adamupdate(JRNY,grad,averageGrad,averageSqGrad,epoch,learnRate); % update neural network
-            end
-        end
-        disp(['Epoch ' num2str(epoch)]);
-        disp(['     Physics loss: ' num2str(lossDisp(1))])
-        disp(['     BC loss: ' num2str(lossDisp(2))])
-        disp(['     Velocity loss: ' num2str(lossDisp(3))])
-        disp(['     Pressure loss: ' num2str(lossDisp(4))])
-        disp(['     Max velocity: ' num2str(lossDisp(5))])
-        disp(['     Max divergence: ' num2str(lossDisp(6))])
-
-        recordMetrics(monitor,epoch,Loss=loss);
-        updateInfo(monitor,'Epoch',[num2str(epoch) ' of ' num2str(numEpochs)]);
-        monitor.Progress = 100 * epoch/numEpochs;
-        
+    % plot
+    trainingDiv = avgDiv(dlX,dlY,Nx,Ny,Ns,L,D); % compute average divergence of training velocity fields
+    testDataOut = zeros(Nx,Ny,Nc,nTest);
+    testDataX = gather(extractdata(testDataX)); % convert from GPUarray for plotting
+    testDataY = gather(extractdata(testDataY));
+    for i = 1:5 % compare 10 outputs to ground truth data
+        testDataOut(:,:,:,i) = forward(PINN,testDataX(:,:,:,i)); % run model for each test sample
+        plotXY(testDataX(:,:,:,i),testDataY(:,:,:,i),Nx,Ny, ...
+            ['Test Sample ' num2str(i) ' (' num2str(testIdx(i)) '): Ground Truth Data'])
+        plotXY(testDataX(:,:,:,i),testDataOut(:,:,:,i),Nx,Ny, ...
+            ['Test Sample ' num2str(i) ' (' num2str(testIdx(i)) '): Model Output'])
     end
 
-% compare output to sample
+    % plot error heatmap for sample 5
+    uTest = sqrt(testDataY(:,:,1,5).^2 + testDataY(:,:,2,5).^2);
+    uOut = sqrt(testDataOut(:,:,1,5).^2 + testDataOut(:,:,2,5).^2);
+    uError = abs(uTest - uOut); % = abs res. velocity error / Uin
+    figure()
+    imagesc(uError')
+    title('Error Heatmap')
+    xlabel('Nx')
+    ylabel('Ny')
+    axis equal
+    xlim([0 Nx])
+    ylim([0 Ny])
+    clim([0 0.15])
+    cb = colorbar;
+    cb.Label.String = '\deltav / U_{in}';
 
-    Y_out = forward(JRNY,dlX(:,:,:,random));
-    Y_out = extractdata(Y_out);
-    plotXY(dataX(:,:,:,random),squeeze(Y_out),Nx,Ny,'Output');
+    % plot convergence
+    figure()
+    title('Error vs. Training Epoch')
+    xlabel('Epoch')
+    yyaxis left
+    plot(1:1:numEpochs,cvg(:,4))
+    ylabel('Velocity L_2 Error')
+    yyaxis right
+    plot(1:1:numEpochs,cvg(:,1))
+    yline(trainingDiv,'LineStyle','--','Color','red', ...
+        'Label','Average Training Set Divergence (absolute)')
+    ylabel('Mean Divergence')

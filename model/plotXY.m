@@ -82,7 +82,8 @@ function plotXY(X,Y,Nx,Ny,text)
         ylim([0 Ny])
         set(gca,'YDir','normal')
         set(gca,'Colormap',jet)
-        colorbar
+        cb = colorbar;
+        cb.Label.String = 'U_{res} / U_{in}';
 
         % streamlines
         nexttile(plot)
@@ -99,21 +100,21 @@ function plotXY(X,Y,Nx,Ny,text)
         set(gca,'YDir','normal')
         set(gca,'Colormap',gray)
     
-        % pressure
-        nexttile(plot)
-        hold on
-        imagesc(P')
-        objImgP = image(objectRGB);
-        set(objImgP,'AlphaData',object')
-        title('Pressure')
-        xlabel('Nx')
-        ylabel('Ny')
-        axis equal
-        xlim([0 Nx])
-        ylim([0 Ny])
-        set(gca,'YDir','normal')
-        set(gca,'Colormap',jet)
-        colorbar
+        % % pressure
+        % nexttile(plot)
+        % hold on
+        % imagesc(P')
+        % objImgP = image(objectRGB);
+        % set(objImgP,'AlphaData',object')
+        % title('Pressure')
+        % xlabel('Nx')
+        % ylabel('Ny')
+        % axis equal
+        % xlim([0 Nx])
+        % ylim([0 Ny])
+        % set(gca,'YDir','normal')
+        % set(gca,'Colormap',jet)
+        % colorbar
 
     set(gcf,'Visible','on') % open plots in new window
 end

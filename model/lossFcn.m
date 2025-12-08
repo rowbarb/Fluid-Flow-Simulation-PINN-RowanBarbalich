@@ -1,4 +1,4 @@
-function [loss,grad,lossDisp] = lossFcn(neuralNet,dlX,dlY,Nx,Ny,L,D,rho,nu,Uin,w_phys,w_bc,w_UV,w_P)
+function [loss,grad,cvg,lossDisp] = lossFcn(neuralNet,dlX,dlY,Nx,Ny,L,D,nu,Uin,w_phys,w_bc,w_UV,w_P)
 %% compute the loss and its gradient for a given input
 
     % forward pass
@@ -6,94 +6,57 @@ function [loss,grad,lossDisp] = lossFcn(neuralNet,dlX,dlY,Nx,Ny,L,D,rho,nu,Uin,w
     U = Y(:,:,1);
     V = Y(:,:,2);
     P = Y(:,:,3);
-    % X = extractdata(dlX);
 
-    % grid spacing
-    Nx = size(Y,1);
-    Ny = size(Y,2);
-    dx = L / (Nx - 1);
+    % prepare data
+    U = min(max(U, -2.0), 2.0); % hard clamp to prevent residual explosion
+    V = min(max(V, -2.0), 2.0);
+    U_soft = tanh(U/2.5)*2.5; % soft clamp
+    V_soft = tanh(V/2.5)*2.5;
+    
+    % compure parameters
+    dx = L / (Nx - 1); % grid spacing
     dy = D / (Ny - 1);
+    object = dlX(:,:,2)==0; % region masks
+    fluid = dlX(:,:,2)==1;
+    wall = dlX(:,:,2)==2;
+    inlet = dlX(:,:,2)==3;
+    outlet = dlX(:,:,2)==4;
+    Re = Uin * D / nu; % Reynolds number
 
     % governing equation residuals
-        
-        % allocate arrays
-        dUdx = zeros(Nx,Ny);
-        dVdx = zeros(Nx,Ny);
-        dUdy = zeros(Nx,Ny);
-        dVdy = zeros(Nx,Ny);
-        dPdx = zeros(Nx,Ny);
-        dPdy = zeros(Nx,Ny);
-        dUdxx = zeros(Nx,Ny);
-        dVdxx = zeros(Nx,Ny);
-        dUdyy = zeros(Nx,Ny);
-        dVdyy = zeros(Nx,Ny);
+    [dUdx,dVdx,dUdy,dVdy,dUdxx,dVdxx,dUdyy,dVdyy,dPdx,dPdy] = derivativesUVP(U,V,P,Nx,Ny,dx,dy);
 
-        % 2nd order 1st derivative FDM for boundary points
-        dUdx(1,:) = (-3*U(1,:) + 4*U(2,:) - U(3,:)) / (2*dx);
-        dVdx(1,:) = (-3*V(1,:) + 4*V(2,:) - V(3,:)) / (2*dx);
-        dPdx(1,:) = (-3*P(1,:) + 4*P(2,:) - P(3,:)) / (2*dx);
-        dUdx(end,:) = (3*U(end,:) - 4*U(end-1,:) + U(end-2,:)) / (2*dx);
-        dVdx(end,:) = (3*V(end,:) - 4*V(end-1,:) + V(end-2,:)) / (2*dx);
-        dPdx(end,:) = (3*P(end,:) - 4*P(end-1,:) + P(end-2,:)) / (2*dx);
-        
-        dUdy(:,1) = (-3*U(:,1) + 4*U(:,2) - U(:,3)) / (2*dy);
-        dVdy(:,1) = (-3*V(:,1) + 4*V(:,2) - V(:,3)) / (2*dy);
-        dPdy(:,1) = (-3*P(:,1) + 4*P(:,2) - P(:,3)) / (2*dy);
-        dUdy(:,end) = (3*U(:,end) - 4*U(:,end-1) + U(:,end-2)) / (2*dy);
-        dVdy(:,end) = (3*V(:,end) - 4*V(:,end-1) + V(:,end-2)) / (2*dy);
-        dPdy(:,end) = (3*P(:,end) - 4*P(:,end-1) + P(:,end-2)) / (2*dy);
+    continuity = (dUdx + dVdy).*fluid; % multiply by fluid (Nx x Ny boolean array) to remove object and walls
+    xmomentum = (U .* dUdx + V .* dUdy + dPdx - (1/Re)*(dUdxx + dUdyy)).*fluid; 
+    ymomentum = (V .* dVdy + U .* dVdx + dPdy - (1/Re)*(dVdxx + dVdyy)).*fluid;
 
-        % 2nd order 1st derivative central difference scheme for interior points
-        dUdx(2:end-1,:) = (U(3:end,:)-U(1:end-2,:)) / (2*dx);
-        dVdx(2:end-1,:) = (V(3:end,:)-V(1:end-2,:)) / (2*dx);
-        dPdx(2:end-1,:) = (P(3:end,:)-P(1:end-2,:)) / (2*dx);
-
-        dUdy(:,2:end-1) = (U(:,3:end)-U(:,1:end-2)) / (2*dy);
-        dVdy(:,2:end-1) = (V(:,3:end)-V(:,1:end-2)) / (2*dy);
-        dPdy(:,2:end-1) = (P(:,3:end)-P(:,1:end-2)) / (2*dy);
-
-        % 2nd order 2nd derivative FDM for boundary points
-        dUdxx(1,:) = (2*U(1,:) - 5*U(2,:) + 4*U(3,:) - U(4,:)) / (dx^2);
-        dVdxx(1,:) = (2*V(1,:) - 5*V(2,:) + 4*V(3,:) - V(4,:)) / (dx^2);
-        dUdxx(end,:) = (2*U(end,:) - 5*U(end-1,:) + 4*U(end-2,:) - U(end-3,:)) / (dx^2);
-        dVdxx(end,:) = (2*V(end,:) - 5*V(end-1,:) + 4*V(end-2,:) - V(end-3,:)) / (dx^2);
-        dUdyy(:,1) = (2*U(:,1) - 5*U(:,2) + 4*U(:,3) - U(:,4)) / (dy^2);
-        dVdyy(:,1) = (2*V(:,1) - 5*V(:,2) + 4*V(:,3) - V(:,4)) / (dy^2);
-        dUdyy(:,end) = (2*U(:,end) - 5*U(:,end-1) + 4*U(:,end-2) - U(:,end-3)) / (dy^2);
-        dVdyy(:,end) = (2*V(:,end) - 5*V(:,end-1) + 4*V(:,end-2) - V(:,end-3)) / (dy^2);
-
-        % 2nd order 2nd derivative central difference for interior points
-        dUdxx(2:end-1,:) = (U(1:end-2,:) - 2*U(2:end-1,:) + U(3:end,:)) / (dx^2);
-        dVdxx(2:end-1,:) = (V(1:end-2,:) - 2*V(2:end-1,:) + V(3:end,:)) / (dx^2);
-        dUdyy(:,2:end-1) = (U(:,1:end-2) - 2*U(:,2:end-1) + U(:,3:end)) / (dy^2);
-        dVdyy(:,2:end-1) = (V(:,1:end-2) - 2*V(:,2:end-1) + V(:,3:end)) / (dy^2);
-
-    continuity = dUdx + dVdy;
-    xmomentum = U .* dUdx + V .* dUdy + dPdx./rho - nu*(dUdxx + dUdyy);
-    ymomentum = V .* dVdy + U .* dVdx + dPdy./rho - nu*(dVdxx + dVdyy);
-
-    % gov eq. loss (MSE)
-    physicsLoss = mean(continuity.^2,'all') ...
-                + mean(xmomentum.^2,'all') ...
-                + mean(ymomentum.^2,'all');
+    % gov eq. loss (MSE) and residuals
+    % physicsLoss = mean(continuity.^2,'all') ...
+    %             + mean(xmomentum.^2,'all') ...
+    %             + mean(ymomentum.^2,'all');
+    physicsLoss =  mean(continuity.^2,'all');
+    div_mean = mean(abs(continuity),'all');
+    div_max = max(abs(continuity),[],'all');
+    mom_mean = sqrt(mean(xmomentum.^2 + ymomentum.^2,'all'));
         
     % boundary condition loss (MSE)
-    u = sqrt(U.^2 + V.^2);
-    inletLoss = mean((U(1,:)-Uin).^2,'all');
-    wallLoss = mean(u(2:end-1,1).^2,'all') + mean(u(2:end-1,end).^2,'all');
-    outletLoss = mean(dUdx(end,:).^2,'all'); % dU/dx = 0 at outlet, implement later
-    objectLoss = mean(u(dlX(:,:,2)==0).^2,'all');
-    bcLoss = inletLoss + wallLoss + outletLoss + objectLoss;
+    u_res = sqrt(U_soft.^2 + V_soft.^2);
+    inletLoss = mean((U_soft(inlet)-1).^2,'all'); % inlet velocity (normalized to Uin)
+    wallLoss = mean(u_res(wall).^2,'all'); % no slip
+    outletLoss = mean(dUdx(outlet).^2,'all'); % zero gradient
+    objectLoss = mean(u_res(object).^2,'all');
+    bcLoss = inletLoss + wallLoss + outletLoss + objectLoss; % prioritize no slip
     
-    % data loss (MSE)
+    % data loss (MSE) and residuals
     dataLossUV = mean((Y(:,:,1:2) - dlY(:,:,1:2)).^2, 'all');
-    dataLossP  = mean((Y(:,:,3) - dlY(:,:,3)).^2, 'all');
+    % dataLossP  = mean((Y(:,:,3) - dlY(:,:,3)).^2, 'all');
+    dataLossP = max(abs(Y(:,:,3) - dlY(:,:,3)),[],'all');
+    U_L2 = sqrt(sum((Y(:,:,1:2) - dlY(:,:,1:2)).^2,'all')) / sqrt(sum(dlY(:,:,1:2).^2,'all')); % relative L2 (Frobenius) error norm of velocity error
+    P_L2 = sqrt(sum((Y(:,:,3) - dlY(:,:,3)).^2,'all')) / sqrt(sum(dlY(:,:,3).^2,'all'));
 
     % total loss and gradient
-    loss = w_UV * dataLossUV ...
-     + w_P  * dataLossP ...
-     + w_bc     * bcLoss ...
-     + w_phys   * physicsLoss;
+    loss = w_UV*dataLossUV + w_P*dataLossP + w_bc*bcLoss + w_phys*physicsLoss;
     grad = dlgradient(loss,neuralNet.Learnables);
-    lossDisp = [physicsLoss bcLoss dataLossUV dataLossP max(u,[],'all') max(continuity,[],'all')];
+    cvg = [div_mean div_max mom_mean U_L2 P_L2];
+    lossDisp = [physicsLoss bcLoss dataLossUV dataLossP max(u_res,[],'all')];
 end
