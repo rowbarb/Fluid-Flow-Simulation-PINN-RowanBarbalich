@@ -1,5 +1,5 @@
 function mat = numpy2mat(file,Nx,Ny,Nc,Ns)
-%% converts numpy array to MATLAB double array
+%% converts python numpy array to MATLAB double array
     assert(isa(file,'py.numpy.ndarray')) % check file type
     mat = double(py.array.array('d', file.flatten())); % convert to 1D double (incorrect dimensions)
     shape = [Ny,Nx,Nc,Ns]; % dimensions are reversed compared to the documentation
