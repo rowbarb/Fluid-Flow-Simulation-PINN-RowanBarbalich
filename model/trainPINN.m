@@ -14,7 +14,7 @@ function [PINN,cvgOut] = trainPINN(PINN,Nx,Ny,Ns,dlX,dlY,numEpochs,szBatch,lossF
     
     % train neural network
     for epoch = 1:numEpochs
-        if epoch <= 50 % weight and learning rate schedule
+        if epoch <= 50 % weight and learning rate schedule, see report for details
             w_UV = 1.0;  w_P = 0.05;  w_bc = 0.01;  w_phys = 0;
             learnRate = 1e-4;
         elseif epoch <= 150

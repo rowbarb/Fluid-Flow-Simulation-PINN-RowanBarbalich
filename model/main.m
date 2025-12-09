@@ -77,9 +77,9 @@
     testDataOut = zeros(Nx,Ny,Nc,nTest);
     testDataX = gather(extractdata(testDataX)); % convert from GPUarray for plotting
     testDataY = gather(extractdata(testDataY));
-    for i = 1:nTest % compare 10 outputs to ground truth data
+    for i = 1:nTest
         testDataOut(:,:,:,i) = forward(PINN,testDataX(:,:,:,i)); % run model for each test sample
-        if i <= 10
+        if i <= 10 % plot first 10 and compare to ground truth
             plotXY(testDataX(:,:,:,i),testDataY(:,:,:,i),Nx,Ny, ...
                 ['Test Sample ' num2str(i) ' (' num2str(testIdx(i)) '): Ground Truth Data'])
             plotXY(testDataX(:,:,:,i),testDataOut(:,:,:,i),Nx,Ny, ...

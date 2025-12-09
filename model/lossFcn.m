@@ -32,7 +32,7 @@ function [loss,grad,cvg,lossDisp] = lossFcn(neuralNet,dlX,dlY,Nx,Ny,L,D,nu,Uin,w
 
     % gov eq. loss (MSE) and residuals
     % physicsLoss = mean(continuity.^2,'all') ... removed momentum for model convergence,
-    %             + mean(xmomentum.^2,'all') ... see 'Issues Encountered' report section
+    %             + mean(xmomentum.^2,'all') ... see 'Issues Encountered' section in report
     %             + mean(ymomentum.^2,'all');
     physicsLoss =  mean(continuity.^2,'all');
     div_mean = mean(abs(continuity),'all');
